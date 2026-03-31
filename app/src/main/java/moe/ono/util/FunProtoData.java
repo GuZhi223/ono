@@ -1,6 +1,7 @@
 package moe.ono.util;
 
 import com.google.protobuf.CodedInputStream;
+import com.google.protobuf.CodedOutputStream;
 import com.google.protobuf.InvalidProtocolBufferException;
 
 import org.json.JSONArray;
