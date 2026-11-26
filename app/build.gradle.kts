@@ -23,6 +23,8 @@ android {
 
     signingConfigs {
         create("release") {
+            // CI 密钥缺失时 workflow 会跳过生成 ono.jks，此时走下方 fallback：
+            // release 变体自动改用 debug 签名，保证无 secrets 的 fork 也能构建。
             val storePath = project.findProperty("KEYSTORE_FILE") as String? ?: "ono.jks"
             val resolved = file(storePath)
             if (resolved.exists()) {

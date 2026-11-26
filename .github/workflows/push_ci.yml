@@ -48,10 +48,19 @@ jobs:
         run: chmod +x gradlew
 
       - name: Decode keystore (push -> main)
+        id: keystore
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           mkdir -p app
-          echo "$KEYSTORE_B64" | base64 -d > app/ono.jks
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > app/ono.jks
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Release keystore decoded; will sign with it."
+          else
+            rm -f app/ono.jks
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::KEYSTORE_B64 is not set; release APK will fall back to debug signing."
+          fi
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
 
@@ -59,15 +68,20 @@ jobs:
         if: github.event_name == 'pull_request'
         run: ./gradlew assembleRelease --warning-mode all --stacktrace
 
-      - name: Build signed Release for main
+      - name: Build Release for main (signed if keystore available)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          ./gradlew assembleRelease \
-            -PKEYSTORE_FILE=ono.jks \
-            -PKEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }} \
-            -PKEY_ALIAS=key0 \
-            -PKEY_PASSWORD=${{ secrets.KEY_PASSWORD }} \
-            --warning-mode all --stacktrace
+          if [ "${{ steps.keystore.outputs.available }}" = "true" ]; then
+            ./gradlew assembleRelease \
+              -PKEYSTORE_FILE=ono.jks \
+              -PKEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }} \
+              -PKEY_ALIAS=key0 \
+              -PKEY_PASSWORD=${{ secrets.KEY_PASSWORD }} \
+              --warning-mode all --stacktrace
+          else
+            echo "::notice::No keystore configured; building release with debug signing."
+            ./gradlew assembleRelease --warning-mode all --stacktrace
+          fi
 
       - name: Build debug APK for manual run
         if: github.event_name == 'workflow_dispatch'
@@ -103,18 +117,34 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ success() && github.ref == 'refs/heads/main' && github.event_name == 'push' }}
     steps:
+      - name: Check Telegram config
+        id: telegram
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -n "$BOT_TOKEN" ] && [ -n "$CHAT_ID" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Telegram secrets are not configured; skipping APK upload."
+          fi
+
       - name: Checkout code
+        if: steps.telegram.outputs.enabled == 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Download APK artifact
+        if: steps.telegram.outputs.enabled == 'true'
         uses: actions/download-artifact@v4
         with:
           name: ono-release-apk
           path: artifacts
 
       - name: Find APK file
+        if: steps.telegram.outputs.enabled == 'true'
         id: find_apk
         shell: bash
         run: |
@@ -127,6 +157,7 @@ jobs:
           echo "apk_path=${files[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Send APK via Telegram API
+        if: steps.telegram.outputs.enabled == 'true'
         env:
           BOT_TOKEN:      ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID:        ${{ secrets.TELEGRAM_CHAT_ID }}
